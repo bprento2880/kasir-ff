@@ -6,7 +6,7 @@
  *  PENTING: naikkan CACHE_VER tiap kali index.html diubah,
  *  kalau tidak HP kasir akan terus pakai versi lama.
  * ========================================================== */
-const CACHE_VER = 'ff-pos-v2';
+const CACHE_VER = 'ff-pos-v3';
 
 const SHELL = [
   './',

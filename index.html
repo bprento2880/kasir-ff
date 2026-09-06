@@ -2973,8 +2973,47 @@ function loadBarang() {
     .getAdminItems(S.ownerPin);
 }
 
+var BARANG_MAKS = 100;
+
 function renderBarang() {
-  var q = (MO.qBarang || '').toLowerCase();
+  // Rangka (kotak cari + wadah daftar) cuma dibangun sekali.
+  // Kalau sudah ada, jangan disentuh — kalau dibongkar, caret ketikan ikut hilang.
+  if (!$('qBarang') || !$('moBarangList')) {
+    $('secBarang').innerHTML =
+      '<div class="mo-bar">' +
+        '<input type="text" id="qBarang" placeholder="Cari nama, kode, atau barcode" value="' + esc(MO.qBarang || '') + '">' +
+      '</div>' +
+      '<div class="mo-card" id="moBarangList"></div>' +
+      '<div class="mo-fab"><button class="btn btn-primary" id="btnBarangBaru" type="button">+ Tambah Barang</button></div>';
+
+    $('qBarang').oninput = function () {
+      MO.qBarang = this.value;
+      clearTimeout(MO._tBarang);
+      MO._tBarang = setTimeout(renderBarangList, 120);   // debounce: 698 barang jangan difilter tiap ketukan
+    };
+    $('btnBarangBaru').onclick = function () { formBarang(null); };
+  }
+  renderBarangList();
+}
+
+function barisBarangHtml(it) {
+  return '<button type="button" class="mo-row" data-kode="' + esc(it.kode) + '">' +
+    moThumb(it) +
+    '<div class="in"><div class="nm">' + esc(it.nama) + '</div>' +
+    '<div class="sb">' + esc(it.kode) + (it.barcode ? ' · ' + esc(it.barcode) : '') + '</div>' +
+    '<span class="mo-pill">' + esc(it.kategori) + '</span>' +
+    (it.aktif ? '' : ' <span class="mo-pill bad">Nonaktif</span>') +
+    '</div>' +
+    '<div class="rt"><div class="q' + (it.stok <= 0 ? ' zero' : '') + '">' + it.stok + '</div>' +
+    '<div class="p">' + rp(it.harga) + '</div></div>' +
+    '</button>';
+}
+
+function renderBarangList() {
+  var box = $('moBarangList');
+  if (!box) return;
+
+  var q = (MO.qBarang || '').toLowerCase().trim();
   var list = MO.barang.filter(function (it) {
     if (!q) return true;
     return it.nama.toLowerCase().indexOf(q) > -1 ||
@@ -2982,34 +3021,19 @@ function renderBarang() {
            String(it.barcode).toLowerCase().indexOf(q) > -1;
   });
 
-  var html =
-    '<div class="mo-bar">' +
-      '<input type="text" id="qBarang" placeholder="Cari nama, kode, atau barcode" value="' + esc(MO.qBarang || '') + '">' +
-    '</div>' +
-    '<div class="mo-card">';
+  var html = '';
+  if (!list.length) html = moKosong('Barang tidak ditemukan.');
+  else {
+    list.slice(0, BARANG_MAKS).forEach(function (it) { html += barisBarangHtml(it); });
+    if (list.length > BARANG_MAKS) {
+      html += '<div style="padding:12px;text-align:center;font-size:13px;opacity:.65">' +
+              'Menampilkan ' + BARANG_MAKS + ' dari ' + list.length +
+              ' barang. Ketik di kotak cari untuk mempersempit.</div>';
+    }
+  }
+  box.innerHTML = html;
 
-  if (!list.length) html += moKosong('Barang tidak ditemukan.');
-  else list.forEach(function (it) {
-    html += '<button type="button" class="mo-row" data-kode="' + esc(it.kode) + '">' +
-      moThumb(it) +
-      '<div class="in"><div class="nm">' + esc(it.nama) + '</div>' +
-      '<div class="sb">' + esc(it.kode) + (it.barcode ? ' · ' + esc(it.barcode) : '') + '</div>' +
-      '<span class="mo-pill">' + esc(it.kategori) + '</span>' +
-      (it.aktif ? '' : ' <span class="mo-pill bad">Nonaktif</span>') +
-      '</div>' +
-      '<div class="rt"><div class="q' + (it.stok <= 0 ? ' zero' : '') + '">' + it.stok + '</div>' +
-      '<div class="p">' + rp(it.harga) + '</div></div>' +
-      '</button>';
-  });
-
-  html += '</div>' +
-    '<div class="mo-fab"><button class="btn btn-primary" id="btnBarangBaru" type="button">+ Tambah Barang</button></div>';
-
-  $('secBarang').innerHTML = html;
-
-  $('qBarang').oninput = function () { MO.qBarang = this.value; renderBarang(); $('qBarang').focus(); };
-  $('btnBarangBaru').onclick = function () { formBarang(null); };
-  document.querySelectorAll('#secBarang .mo-row').forEach(function (b) {
+  box.querySelectorAll('.mo-row').forEach(function (b) {
     b.onclick = function () { formBarang(b.getAttribute('data-kode')); };
   });
 }
@@ -3319,7 +3343,13 @@ function renderStok() {
   document.querySelectorAll('#secStok .mo-tab').forEach(function (b) {
     b.onclick = function () { MO.stokTab = b.getAttribute('data-st'); renderStok(); };
   });
-  $('qStok').oninput = function () { MO.qStok = this.value; renderStok(); $('qStok').focus(); };
+   $('qStok').oninput = function () {
+    MO.qStok = this.value;
+    var pos = this.selectionStart;
+    renderStok();
+    var el = $('qStok'); el.focus();
+    try { el.setSelectionRange(pos, pos); } catch (e) {}
+  };
   $('btnStokLog').onclick = tampilStokLog;
   document.querySelectorAll('#secStok .mo-row').forEach(function (b) {
     b.onclick = function () { formStok(b.getAttribute('data-kode')); };

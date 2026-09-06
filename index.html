@@ -902,9 +902,31 @@ function tokenGate() {
 
 if (IS_PWA) {
   window.google = { script: { run: makeRunner(), host: { close: function () {} } } };
-  if ('serviceWorker' in navigator) {
+   if ('serviceWorker' in navigator) {
     window.addEventListener('load', function () {
-      navigator.serviceWorker.register('./sw.js').catch(function (e) {
+      navigator.serviceWorker.register('./sw.js').then(function (reg) {
+
+        // Kasus 1: isi index.html berubah — kabar datang dari sw.js
+        navigator.serviceWorker.addEventListener('message', function (ev) {
+          if (ev.data && ev.data.type === 'VERSI_BARU') tandaVersiBaru();
+        });
+
+        // Kasus 2: sw.js sendiri yang berubah
+        reg.addEventListener('updatefound', function () {
+          var sw = reg.installing;
+          if (!sw) return;
+          sw.addEventListener('statechange', function () {
+            // controller kosong = instalasi pertama, jangan ganggu pengguna
+            if (sw.state === 'installed' && navigator.serviceWorker.controller) tandaVersiBaru();
+          });
+        });
+
+        document.addEventListener('visibilitychange', function () {
+          if (!document.hidden) reg.update().catch(function () {});
+        });
+        setInterval(function () { reg.update().catch(function () {}); }, 900000);
+
+      }).catch(function (e) {
         console.log('SW gagal:', e.message);
       });
     });
@@ -944,6 +966,48 @@ function toast(msg, isErr) {
   t._t = setTimeout(function () { t.className = ''; }, isErr ? 4200 : 2400);
 }
 
+/* =========================================================
+   PALANG "VERSI BARU"
+   Sengaja tidak muat ulang otomatis — kalau lagi ada keranjang
+   jalan atau antrian belum terkirim, muat ulang mendadak itu bencana.
+   ========================================================= */
+var VERSI_BARU_TAMPIL = false;
+
+function tandaVersiBaru() {
+  if (VERSI_BARU_TAMPIL || $('barVersiBaru')) return;
+  VERSI_BARU_TAMPIL = true;
+
+  var bar = document.createElement('div');
+  bar.id = 'barVersiBaru';
+  bar.setAttribute('style',
+    'position:fixed;left:12px;right:12px;bottom:12px;z-index:9999;' +
+    'display:flex;align-items:center;gap:10px;padding:12px 14px;' +
+    'border-radius:12px;background:#0B1E2D;color:#fff;' +
+    'font-size:14px;box-shadow:0 6px 24px rgba(0,0,0,.28)');
+
+  bar.innerHTML =
+    '<span style="flex:1;line-height:1.35">Versi baru sudah siap dipakai.</span>' +
+    '<button type="button" id="bvbNanti" style="background:none;border:0;color:#9FB3C8;' +
+      'font-size:14px;padding:6px 8px">Nanti</button>' +
+    '<button type="button" id="bvbMuat" style="background:#1DB954;border:0;color:#fff;' +
+      'font-weight:600;font-size:14px;padding:8px 14px;border-radius:8px">Muat ulang</button>';
+
+  document.body.appendChild(bar);
+
+  $('bvbNanti').onclick = function () {
+    bar.parentNode.removeChild(bar);
+    VERSI_BARU_TAMPIL = false;
+  };
+
+  $('bvbMuat').onclick = function () {
+    var sisaAntrian = (typeof outboxCount === 'function') ? outboxCount() : 0;
+    if (S.cart.length && !confirm('Keranjang masih berisi ' + S.cart.length +
+        ' barang dan akan hilang. Lanjut muat ulang?')) return;
+    if (sisaAntrian && !confirm('Masih ada ' + sisaAntrian +
+        ' transaksi di antrian. Antrian tetap aman tersimpan. Lanjut?')) return;
+    location.reload();
+  };
+}
 function busy(on) {
   S.busy = on;
   ['btnSave', 'btnPrint', 'btnReset', 'btnSaveAsPesanan2'].forEach(function (id) {

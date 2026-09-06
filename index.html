@@ -323,6 +323,8 @@ body.offline .net-pill{display:inline-block}
 .outbox-row .st b{font-size:13.5px;color:#7A4E00}
 .outbox-row button{flex:0 0 auto;padding:8px 13px;border:0;border-radius:8px;background:var(--signal);color:#fff;font-size:12px;font-weight:700;cursor:pointer}
 .outbox-row button:disabled{opacity:.5}
+#obTag{display:none;margin-left:8px;padding:3px 8px;border-radius:999px;background:var(--signal);color:#fff;font-family:var(--mono);font-size:10px;font-weight:700}
+#obTag.on{display:inline-block}
 
 .modal-mask.page{align-items:stretch;padding:0;background:var(--frost)}
 .modal-mask.page .modal-card{max-width:720px;margin:0 auto;border-radius:0;max-height:none;min-height:100%;padding:14px 16px 40px;box-shadow:none}
@@ -1790,6 +1792,22 @@ function renderOutbox() {
   }
   var b = $('btnOutboxSend');
   if (b) { b.disabled = FLUSHING || n === 0; b.textContent = FLUSHING ? 'MENGIRIM…' : 'KIRIM'; }
+
+  /* Penanda di header — kelihatan dari layar mana pun, termasuk layar kasir. */
+  var tag = $('obTag');
+  if (!tag) {
+    var host = $('todayLabel');
+    if (host && host.parentNode) {
+      tag = document.createElement('span');
+      tag.id = 'obTag';
+      host.parentNode.insertBefore(tag, host.nextSibling);
+    }
+  }
+  if (tag) {
+    tag.className = n > 0 ? 'on' : '';
+    tag.textContent = '⏳ ' + n;
+    tag.title = n + ' transaksi menunggu kirim';
+  }
 }
 
 /** Kirim antrian satu per satu. Berhenti kalau ada yang gagal karena jaringan;

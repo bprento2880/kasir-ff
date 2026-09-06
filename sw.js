@@ -4,12 +4,20 @@
  *  Render instan dari cache, versi baru ditarik diam-diam di background.
  * ========================================================== */
 
-const CACHE_VER = 'ff-pos-v6';
+const CACHE_VER = 'ff-pos-v7';
 
 /* Sengaja minimalis. Satu URL yang 404 bikin addAll gagal total
    dan Service Worker tidak pernah ter-install — gagalnya diam-diam. */
 const PRECACHE = ['./', './index.html'];
 
+/* Kirim kabar ke semua tab yang terbuka. includeUncontrolled dipakai supaya
+   tab yang belum dikuasai SW ini pun tetap kebagian pesan. */
+function beritahuKlien_(pesan) {
+  return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+    .then(function (list) {
+      list.forEach(function (c) { c.postMessage(pesan); });
+    });
+}
 self.addEventListener('install', function (e) {
   e.waitUntil(
     caches.open(CACHE_VER)
@@ -41,13 +49,23 @@ self.addEventListener('fetch', function (e) {
 
   if (!sameOrigin && !isFont) return;   // panggilan API ke Apps Script biarkan lewat apa adanya
 
+  // Cuma rangka app yang dipantau perubahannya — gambar/font berubah itu wajar
+  // dan tidak perlu bikin notifikasi muncul.
+  const adalahShell = req.mode === 'navigate' ||
+                      url.pathname.endsWith('/') ||
+                      /\.html?$/i.test(url.pathname);
+
   e.respondWith(
     caches.open(CACHE_VER).then(function (cache) {
       return cache.match(req).then(function (cached) {
 
         const jaringan = fetch(req).then(function (res) {
-          // response opaque (font lintas domain) tetap disimpan, statusnya selalu 0
           if (res && (res.ok || res.type === 'opaque')) {
+            if (cached && adalahShell) {
+              const lama = cached.headers.get('ETag') || cached.headers.get('Last-Modified') || '';
+              const baru = res.headers.get('ETag') || res.headers.get('Last-Modified') || '';
+              if (lama && baru && lama !== baru) beritahuKlien_({ type: 'VERSI_BARU' });
+            }
             cache.put(req, res.clone());
           }
           return res;
@@ -55,8 +73,6 @@ self.addEventListener('fetch', function (e) {
           return cached || Response.error();
         });
 
-        // Ada di cache: sajikan sekarang juga, pembaruan jalan di belakang.
-        // Tidak ada: tunggu jaringan.
         return cached || jaringan;
       });
     })

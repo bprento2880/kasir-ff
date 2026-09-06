@@ -315,6 +315,15 @@ body.offline .net-pill{display:inline-block}
 .sync-item.fail .bar i{width:100%;background:var(--danger)}
 .sync-item.fail .lb{color:var(--danger)}
 
+/* ---------- antrian transaksi offline ---------- */
+.outbox-row{display:none;align-items:center;gap:10px;margin-top:8px;padding:11px 13px;border-radius:var(--radius);background:var(--signal-soft);border:1px solid var(--signal)}
+.outbox-row.on{display:flex}
+.outbox-row .st{flex:1;min-width:0}
+.outbox-row .st small{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#8A5A00}
+.outbox-row .st b{font-size:13.5px;color:#7A4E00}
+.outbox-row button{flex:0 0 auto;padding:8px 13px;border:0;border-radius:8px;background:var(--signal);color:#fff;font-size:12px;font-weight:700;cursor:pointer}
+.outbox-row button:disabled{opacity:.5}
+
 .modal-mask.page{align-items:stretch;padding:0;background:var(--frost)}
 .modal-mask.page .modal-card{max-width:720px;margin:0 auto;border-radius:0;max-height:none;min-height:100%;padding:14px 16px 40px;box-shadow:none}
 .dsc-type{display:flex;border:1px solid var(--edge);border-radius:8px;overflow:hidden;margin-bottom:6px}
@@ -520,6 +529,13 @@ body.paying .top{display:none}
       <span class="net-pill">OFFLINE</span>
     </div>
     <button type="button" id="btnSyncNow" title="Sinkronkan">&#8635;</button>
+  </div>
+  <div class="outbox-row" id="outboxRow">
+    <div class="st">
+      <small>Belum Terkirim</small>
+      <b id="outboxVal">0 transaksi</b>
+    </div>
+    <button type="button" id="btnOutboxSend">KIRIM</button>
   </div>
   <div class="eyebrow">Menu</div>
   <div class="menu-list">
@@ -1739,6 +1755,131 @@ function refreshButtons() {
 }
 
 /* =========================================================
+   ANTRIAN OFFLINE — transaksi disimpan di HP dulu, dikirim
+   otomatis begitu internet balik.
+   ========================================================= */
+var OUTBOX_KEY = 'ff_outbox_v1';
+var OUTBOX_FAIL_KEY = 'ff_outbox_fail_v1';
+var FLUSHING = false;
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+function lsGet(k) { try { return JSON.parse(localStorage.getItem(k) || '[]'); } catch (e) { return []; } }
+function lsPut(k, a) { try { localStorage.setItem(k, JSON.stringify(a)); } catch (e) {} }
+
+function outboxCount() { return lsGet(OUTBOX_KEY).length; }
+function outboxPush(entry) {
+  var a = lsGet(OUTBOX_KEY);
+  a.push(entry);
+  lsPut(OUTBOX_KEY, a);
+  renderOutbox();
+}
+
+function renderOutbox() {
+  var row = $('outboxRow');
+  if (!row) return;
+  var n = outboxCount();
+  var g = lsGet(OUTBOX_FAIL_KEY).length;
+  row.classList.toggle('on', n > 0 || g > 0);
+  var v = $('outboxVal');
+  if (v) {
+    v.textContent = n > 0
+      ? n + ' transaksi menunggu kirim'
+      : g + ' transaksi ditolak server';
+  }
+  var b = $('btnOutboxSend');
+  if (b) { b.disabled = FLUSHING || n === 0; b.textContent = FLUSHING ? 'MENGIRIM…' : 'KIRIM'; }
+}
+
+/** Kirim antrian satu per satu. Berhenti kalau ada yang gagal karena jaringan;
+ *  transaksi yang ditolak server (mis. stok kurang) dipindah ke daftar gagal
+ *  supaya tidak menyumbat antrian. */
+function outboxFlush(manual) {
+  if (FLUSHING) return;
+  if (!outboxCount()) { if (manual) toast('Tidak ada transaksi tertunda'); return; }
+  if (!navigator.onLine) { if (manual) toast('Masih offline', true); return; }
+
+  FLUSHING = true;
+  renderOutbox();
+  var terkirim = 0;
+
+  var step = function () {
+    var list = lsGet(OUTBOX_KEY);
+    if (!list.length) {
+      FLUSHING = false;
+      renderOutbox();
+      if (terkirim) { toast(terkirim + ' transaksi tertunda berhasil dikirim'); syncNow(true); }
+      return;
+    }
+    var head = list[0];
+
+    google.script.run
+      .withSuccessHandler(function () {
+        var cur = lsGet(OUTBOX_KEY);
+        cur.shift();
+        lsPut(OUTBOX_KEY, cur);
+        terkirim++;
+        renderOutbox();
+        step();
+      })
+      .withFailureHandler(function (e) {
+        var pesan = (e && e.message) || '';
+        var masalahJaringan = /fetch|network|jaringan|internet|merespon/i.test(pesan);
+        var cur = lsGet(OUTBOX_KEY);
+
+        if (masalahJaringan) {
+          FLUSHING = false;
+          renderOutbox();
+          if (manual) toast('Koneksi putus — sisa ' + cur.length + ' transaksi tetap tersimpan', true);
+          return;
+        }
+        // Ditolak server: pindahkan ke daftar gagal, jangan diulang terus.
+        var buang = cur.shift();
+        lsPut(OUTBOX_KEY, cur);
+        if (buang) {
+          buang.error = pesan;
+          var g = lsGet(OUTBOX_FAIL_KEY);
+          g.push(buang);
+          lsPut(OUTBOX_FAIL_KEY, g);
+        }
+        toast('1 transaksi ditolak: ' + pesan, true);
+        renderOutbox();
+        step();
+      })
+      .saveTransactionQueued(head.payload);
+  };
+  step();
+}
+
+/** Struk lokal — bentuknya disamakan dengan balasan server. */
+function buildLocalTrx(payload, snapshot, h, bayar) {
+  var n = new Date();
+  var dua = function (x) { return ('0' + x).slice(-2); };
+  return {
+    id: 'ANTRI-' + String(payload.clientId).slice(-6).toUpperCase(),
+    tanggal: S.today || '',
+    jam: dua(n.getHours()) + ':' + dua(n.getMinutes()) + ':' + dua(n.getSeconds()),
+    kasir: payload.kasir, status: 'ANTRIAN', catatan: payload.catatan || '',
+    items: snapshot.map(function (c) {
+      var it = findItem(c.kode) || {};
+      var d = Number(c.diskon) || 0;
+      return { kode: c.kode, nama: c.nama || it.nama || c.kode, harga: c.harga,
+               qty: c.qty, diskonItem: d, subtotal: c.harga * c.qty - d };
+    }),
+    jumlahItem: snapshot.reduce(function (a, c) { return a + c.qty; }, 0),
+    subtotal: h.subtotal, diskon: h.diskon,
+    pajakPersen: h.persen, nilaiPajak: h.pajak, total: h.total,
+    bayar: bayar, metodeBayar: payload.metodeBayar,
+    kembalian: Math.max(0, bayar - h.total),
+    toko: S.settings
+  };
+}
+
+bindSafe('btnOutboxSend', function () { outboxFlush(true); });
+window.addEventListener('online', function () { setTimeout(function () { outboxFlush(false); }, 1500); });
+
+/* =========================================================
    SIMPAN
    ========================================================= */
 function simpan(cetakStruk) {
@@ -1775,9 +1916,8 @@ function simpan(cetakStruk) {
     if (it) it.stok = Math.max(0, it.stok - c.qty);
   });
 
-  clearCart();
+ clearCart();
   showKasirSub('browse');
-  toast('Menyimpan… siap transaksi berikutnya');
 
   var onSuccess = function (res) {
     if (pesananId) updatePesananBadge(Math.max(0, (S.pesananAktif || 0) - 1));
@@ -1798,19 +1938,36 @@ function simpan(cetakStruk) {
     toast('GAGAL SIMPAN: ' + ((e && e.message) || 'tidak diketahui') + ' — keranjang dikembalikan', true);
   };
 
-  if (!navigator.onLine) {
-    setOnline(false);
-    onFail({ message: 'Tidak ada internet' });
+  /* Pelunasan pesanan wajib online: stoknya terkunci di server,
+     tidak boleh diputuskan sepihak oleh HP. */
+  if (pesananId) {
+    if (!navigator.onLine) {
+      setOnline(false);
+      onFail({ message: 'Pelunasan pesanan butuh internet' });
+      return;
+    }
+    toast('Menyimpan…');
+    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFail)
+      .finalizePesanan(pesananId, payload);
     return;
   }
 
-  if (pesananId) {
-    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFail)
-      .finalizePesanan(pesananId, payload);
-  } else {
-    google.script.run.withSuccessHandler(onSuccess).withFailureHandler(onFail)
-      .saveTransaction(payload);
-  }
+  payload.clientId = uid();
+  var localTrx = buildLocalTrx(payload, snapshot, h, bayar);
+
+  var keAntrian = function (alasan) {
+    outboxPush({ payload: payload, trx: localTrx, ts: Date.now() });
+    if (cetakStruk) cetak(localTrx);
+    toast(alasan + ' — masuk antrian (' + outboxCount() + ' menunggu)');
+  };
+
+  if (!navigator.onLine) { setOnline(false); keAntrian('Offline'); return; }
+
+  toast('Menyimpan…');
+  google.script.run
+    .withSuccessHandler(onSuccess)
+    .withFailureHandler(function () { setOnline(false); keAntrian('Server tidak merespon'); })
+    .saveTransactionQueued(payload);
 }
 
 /* =========================================================
@@ -2287,9 +2444,10 @@ function showHome() {
   document.body.style.paddingBottom = '80px';
   ['tabHome', 'tabKasir', 'tabRiwayat', 'tabAdmin'].forEach(function (id) { $(id).classList.toggle('on', id === 'tabHome'); });
    $('homeStaff').textContent = S.staffName || '—';
-  $('homeDate').textContent = S.today || '';
+   $('homeDate').textContent = S.today || '';
   updatePesananBadge(S.pesananAktif || 0);
   renderLastSync();
+  renderOutbox();
   window.scrollTo(0, 0);
 }
 

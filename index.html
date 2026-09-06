@@ -1177,10 +1177,11 @@ function syncNow(silent) {
       syncMark('sBarang', 'done');
       syncMark('sLaporan', 'done');
       google.script.run
-        .withSuccessHandler(function (list) {
+         .withSuccessHandler(function (list) {
           S.pesananCache = list || [];
           updatePesananBadge(S.pesananCache.filter(function (p) { return p && p.status === 'AKTIF'; }).length);
           syncMark('sPesanan', 'done'); syncDone();
+          outboxFlush(false);
         })
         .withFailureHandler(function () { syncMark('sPesanan', 'fail'); syncDone(); })
         .getPesananList();
@@ -1895,7 +1896,20 @@ function buildLocalTrx(payload, snapshot, h, bayar) {
 }
 
 bindSafe('btnOutboxSend', function () { outboxFlush(true); });
-window.addEventListener('online', function () { setTimeout(function () { outboxFlush(false); }, 1500); });
+
+/* Event 'online' tidak bisa diandalkan (apalagi di WebView Android),
+   jadi antrian dicek berkala dan tiap app kembali dibuka. */
+window.addEventListener('online', function () {
+  setTimeout(function () { outboxFlush(false); }, 1500);
+});
+
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) outboxFlush(false);
+});
+
+setInterval(function () {
+  if (!FLUSHING && navigator.onLine && outboxCount()) outboxFlush(false);
+}, 20000);
 
 /* =========================================================
    SIMPAN

@@ -1,31 +1,23 @@
 /* ============================================================
- *  SERVICE WORKER — Kasir Frozen Food
- *  Tugas: nyimpen kerangka app (HTML/font/ikon) di HP, supaya
- *  app tetap kebuka walau reload tanpa internet.
- *
- *  PENTING: naikkan CACHE_VER tiap kali index.html diubah,
- *  kalau tidak HP kasir akan terus pakai versi lama.
+ *  Kasir FF — Service Worker
+ *  Strategi: stale-while-revalidate.
+ *  Render instan dari cache, versi baru ditarik diam-diam di background.
  * ========================================================== */
-const CACHE_VER = 'ff-pos-v5';
 
-const SHELL = [
-  './',
-  './index.html',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png'
-];
+const CACHE_VER = 'ff-pos-v6';
 
-/* ---------- pasang: simpan kerangka app ---------- */
+/* Sengaja minimalis. Satu URL yang 404 bikin addAll gagal total
+   dan Service Worker tidak pernah ter-install — gagalnya diam-diam. */
+const PRECACHE = ['./', './index.html'];
+
 self.addEventListener('install', function (e) {
   e.waitUntil(
     caches.open(CACHE_VER)
-      .then(function (c) { return c.addAll(SHELL); })
-      .then(function () { return self.skipWaiting(); })
+      .then(function (c) { return c.addAll(PRECACHE); })
+      .then(function () { return self.skipWaiting(); })   // jangan nunggu tab lama ditutup
   );
 });
 
-/* ---------- aktif: buang cache versi lama ---------- */
 self.addEventListener('activate', function (e) {
   e.waitUntil(
     caches.keys()
@@ -34,37 +26,38 @@ self.addEventListener('activate', function (e) {
           return k === CACHE_VER ? null : caches.delete(k);
         }));
       })
-      .then(function () { return self.clients.claim(); })
+      .then(function () { return self.clients.claim(); })  // langsung ambil alih tab yang terbuka
   );
 });
 
-/* ---------- ambil data ---------- */
 self.addEventListener('fetch', function (e) {
-  var req = e.request;
-
-  // POST ke Apps Script (semua panggilan data) — jangan disentuh sama sekali.
+  const req = e.request;
   if (req.method !== 'GET') return;
 
-  // Jangan pernah cache endpoint Apps Script, walau kebetulan GET.
-  if (req.url.indexOf('script.google.com') > -1) return;
+  const url = new URL(req.url);
+  const sameOrigin = url.origin === self.location.origin;
+  const isFont = /fonts\.(googleapis|gstatic)\.com/.test(url.hostname) ||
+                 /\.(woff2?|ttf|otf)$/i.test(url.pathname);
+
+  if (!sameOrigin && !isFont) return;   // panggilan API ke Apps Script biarkan lewat apa adanya
 
   e.respondWith(
-    caches.match(req).then(function (hit) {
-      // Sudah ada di HP → langsung pakai (ini yang bikin buka app terasa instan).
-      if (hit) return hit;
+    caches.open(CACHE_VER).then(function (cache) {
+      return cache.match(req).then(function (cached) {
 
-      return fetch(req).then(function (res) {
-        // Simpan buat dipakai lain kali. Font Google ikut ke-cache di sini.
-        if (res && (res.status === 200 || res.type === 'opaque')) {
-          var copy = res.clone();
-          caches.open(CACHE_VER).then(function (c) { c.put(req, copy); });
-        }
-        return res;
-      }).catch(function () {
-        // Offline dan belum pernah ke-cache. Kalau ini navigasi halaman,
-        // kasih index.html supaya app tetap kebuka.
-        if (req.mode === 'navigate') return caches.match('./index.html');
-        return new Response('', { status: 504, statusText: 'Offline' });
+        const jaringan = fetch(req).then(function (res) {
+          // response opaque (font lintas domain) tetap disimpan, statusnya selalu 0
+          if (res && (res.ok || res.type === 'opaque')) {
+            cache.put(req, res.clone());
+          }
+          return res;
+        }).catch(function () {
+          return cached || Response.error();
+        });
+
+        // Ada di cache: sajikan sekarang juga, pembaruan jalan di belakang.
+        // Tidak ada: tunggu jaringan.
+        return cached || jaringan;
       });
     })
   );
